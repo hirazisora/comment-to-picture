@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="画像・PDFの気になる箇所にコメントをつけ、AIに渡すJSONを作成。ファイルもコメントもブラウザ内で処理。">
+  <title>Comment to Picture — 画像・スライドに添削コメント</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="app-header"><div class="brand"><span class="brand-icon" aria-hidden="true">▧</span><div><h1>Comment to Picture</h1><p>気になる箇所を囲んで、AIに伝える。</p></div></div><span class="privacy">● ブラウザ内で処理・送信なし</span></header>
+  <main>
+    <section class="action-bar" aria-label="ファイルと出力"><div><button id="add-files" class="primary">＋ 画像・PDFを追加</button><input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,application/pdf,.pdf" multiple hidden><span id="summary">まだファイルがありません</span></div><div class="exports"><button id="copy-json" disabled>JSONをコピー</button><button id="download-json" disabled>↓ JSONを保存</button></div></section>
+    <div id="status" class="status" role="status" aria-live="polite">① 読み込む　→　② 範囲を囲んでコメント　→　③ JSONをAIへ</div>
+    <div id="loading" class="loading" hidden><span id="progress"></span><button id="cancel-import">読み込みを中止</button></div>
+    <div class="workspace">
+      <aside class="pages-panel"><div class="panel-heading"><h2>ページ</h2><span id="page-count">0</span></div><nav id="page-list" aria-label="画像・ページ一覧"></nav><p id="page-empty" class="muted small">画像やスライドが<br>ここに並びます。</p><button id="clear-all" class="quiet" disabled>すべて取り除く</button></aside>
+      <section class="viewer-panel" aria-label="画像プレビュー"><div class="viewer-toolbar"><div><button id="previous" aria-label="前のページ" disabled>‹</button><span id="page-label">プレビュー</span><button id="next" aria-label="次のページ" disabled>›</button></div><div><button id="zoom-out" aria-label="縮小" disabled>−</button><output id="zoom-label">100%</output><button id="zoom-in" aria-label="拡大" disabled>＋</button><button id="fit" disabled>全体表示</button></div></div>
+        <div id="viewport" class="viewport"><div id="empty-state" class="empty-state"><div class="empty-icon" aria-hidden="true">▧</div><h2>その「ここ」を、具体的に。</h2><p>画像やPDFを読み込み、直したい箇所を囲みます。<br>コメントと位置をまとめて、AIに渡せます。</p><button id="empty-add" class="primary">画像・PDFを選ぶ</button><p class="small muted">PNG / JPEG / WebP / GIF / BMP / PDF<br>1ファイル50MB・合計150MB・最大100ページ</p></div><div id="stage" hidden><canvas id="canvas"></canvas><div id="overlay" aria-label="ドラッグして範囲を指定"></div></div><p id="render-error" role="alert" hidden></p></div>
+        <div class="viewer-footer"><span id="dimensions">データはこのタブのメモリ内だけに保存されます。</span><button id="keyboard-region" disabled>＋ 範囲を追加</button></div>
+      </section>
+      <aside class="comments-panel"><div class="panel-heading"><h2>コメント</h2><span id="comment-count">0</span></div><p class="small muted">画像上をドラッグして囲むか、「範囲を追加」で位置を入力。</p><form id="editor" hidden><h3 id="editor-title">新しいコメント</h3><label for="comment-text">修正してほしいこと</label><textarea id="comment-text" rows="5" maxlength="10000" placeholder="例：見出しを大きくして、背景とのコントラストを上げてください。"></textarea><fieldset><legend>範囲（左上基準・%）</legend><div class="region-fields"><label>X<input id="region-x" type="number" min="0" max="100" step="0.1"></label><label>Y<input id="region-y" type="number" min="0" max="100" step="0.1"></label><label>幅<input id="region-width" type="number" min="0.1" max="100" step="0.1"></label><label>高さ<input id="region-height" type="number" min="0.1" max="100" step="0.1"></label></div></fieldset><p id="editor-error" class="error" role="alert"></p><div class="editor-actions"><button type="submit" class="primary">保存</button><button id="cancel-edit" type="button">キャンセル</button></div><p class="small muted">Ctrl / ⌘ + Enter で保存、Escでキャンセル</p></form><div id="comment-list"></div><div id="comment-empty" class="comment-empty">まだコメントがありません。<br>1つのページに複数追加できます。</div></aside>
+    </div>
+    <footer><p>ファイル・画像・コメントは外部に送信しません。PDFライブラリも同梱。リロード・タブを閉じると作業は消えます。</p><details><summary>使い方とキーボード操作</summary><p>画像上をドラッグ → コメント入力 → 保存。ページ一覧で切り替え、コメントをクリックして編集・削除できます。範囲は割合で記録され、拡大率には影響されません。</p><p>入力欄以外で ← / →：ページ移動、+ / −：拡大縮小、N：範囲追加。GIFは最初のフレーム、PDFはページの向きを反映します。パスワード付きPDFは未対応です。JSONには元画像を含めないため、AIには元ファイルも別途渡してください。</p></details></footer>
+  </main>
+  <dialog id="unsaved-dialog"><h2>保存していないコメントがあります</h2><p>入力中のコメントをどうしますか？</p><div class="dialog-actions"><button id="draft-save" class="primary">保存して続ける</button><button id="draft-discard">破棄して続ける</button><button id="draft-stay">編集に戻る</button></div></dialog>
+  <dialog id="copy-dialog"><h2>クリップボードにコピーできませんでした</h2><p>下のJSONを選択してコピーするか、「JSONを保存」を使ってください。</p><textarea id="copy-fallback" readonly aria-label="手動コピー用JSON" rows="12"></textarea><button id="close-copy">閉じる</button></dialog>
+  <script type="module" src="./app.mjs"></script>
+</body></html>

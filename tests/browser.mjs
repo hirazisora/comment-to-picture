@@ -1,0 +1,53 @@
+import {createRequire} from 'node:module';
+import {mkdir,writeFile,readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+const require=createRequire(import.meta.url);
+const dependency=name=>require(process.env.TEST_MODULES?process.env.TEST_MODULES+'/'+name:name);
+const {chromium}=dependency('playwright'),{PDFDocument,StandardFonts,rgb,degrees}=dependency('pdf-lib'),{PNG}=dependency('pngjs');
+const output='test-results';await mkdir(output,{recursive:true});
+execFileSync(process.env.TEST_PYTHON||'python',['tests/fixtures.py']);
+const png=new PNG({width:960,height:540});for(let y=0;y<540;y++)for(let x=0;x<960;x++){let i=(y*960+x)*4;png.data[i]=x<480?220:45;png.data[i+1]=y<270?235:120;png.data[i+2]=170;png.data[i+3]=255;}
+const image=PNG.sync.write(png);await writeFile(output+'/sample.png',image);
+const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(let i=0;i<2;i++){const p=pdf.addPage([960,540]);p.drawText('LOCAL TEST SLIDE '+(i+1),{x:60,y:440,size:32,font,color:rgb(.1,.35,.3)});p.drawRectangle({x:60,y:100,width:350,height:230,color:rgb(.8,.9,.8)});if(i===1)p.setRotation(degrees(90));}
+const pdfBytes=Buffer.from(await pdf.save());await writeFile(output+'/sample.pdf',pdfBytes);
+const largePdf=await PDFDocument.create();for(let i=0;i<101;i++)largePdf.addPage([100,100]);const largePdfBytes=Buffer.from(await largePdf.save());
+const browser=await chromium.launch({headless:true});
+const context=await browser.newContext({acceptDownloads:true,permissions:['clipboard-read','clipboard-write']});
+const page=await context.newPage(), requests=[], errors=[];
+page.on('request',r=>requests.push({method:r.method(),url:r.url(),body:r.postData()}));page.on('pageerror',e=>errors.push(e.message));
+page.on('dialog',d=>d.accept());
+const base=process.env.TEST_URL||'http://127.0.0.1:4173/';
+const file=(name,mimeType,buffer)=>({name,mimeType,buffer});
+const load=async files=>{await page.locator('#file-input').setInputFiles(files);await page.locator('#loading').waitFor({state:'hidden'});};
+const assertPages=async n=>assert.equal(await page.locator('.page-item').count(),n);
+const saveComment=async text=>{await page.locator('#comment-text').fill(text);await page.locator('#comment-text').press('Control+Enter');await page.locator('#editor').waitFor({state:'hidden'});};
+const results=[];const pass=text=>{results.push(text);console.log('PASS '+text);};
+try{
+  await page.goto(base);assert.equal(await page.title(),'Comment to Picture — 画像・スライドに添削コメント');assert.ok(await page.locator('#empty-state').isVisible());pass('empty state');
+  await load([file('sample.png','image/png',image),file('sample.pdf','application/pdf',pdfBytes)]);await assertPages(3);await page.locator('#stage').waitFor({state:'visible'});pass('multiple image/PDF import with rotated page');
+  await load([file('sample.png','image/png',image)]);await assertPages(3);assert.match(await page.locator('#status').innerText(),/追加済み/);pass('duplicate skipped');
+  let box=await page.locator('#overlay').boundingBox();await page.mouse.move(box.x+box.width*.2,box.y+box.height*.2);await page.mouse.down();await page.mouse.move(box.x+box.width*.7,box.y+box.height*.6);await page.mouse.up();await saveComment('TEST COMMENT LOCAL ONLY 見出しを修正');
+  await page.locator('#zoom-in').click();assert.equal(await page.locator('#zoom-label').innerText(),'125%');
+  await page.locator('#keyboard-region').click();await page.locator('#region-x').fill('90');await page.locator('#region-width').fill('20');await page.locator('#comment-text').fill('不正範囲');await page.locator('#editor button[type=submit]').click();assert.match(await page.locator('#editor-error').innerText(),/画像内/);
+  await page.locator('#cancel-edit').click();await page.locator('#draft-discard').click();pass('drag, zoom, keyboard region, invalid bounds, discard');
+  await page.locator('.comment-open').click();await page.locator('#comment-text').fill('EDITED LOCAL COMMENT 修正');await page.locator('.page-item').nth(1).click();assert.ok(await page.locator('#unsaved-dialog').isVisible());await page.locator('#draft-stay').click();assert.ok(await page.locator('#editor').isVisible());
+  await page.locator('.page-item').nth(1).click();await page.locator('#draft-save').click();await page.locator('#stage').waitFor({state:'visible'});await page.locator('#keyboard-region').click();await saveComment('PDF first page comment');
+  await page.locator('.page-item').nth(2).click();await page.locator('#stage').waitFor({state:'visible'});await page.locator('#keyboard-region').click();await saveComment('Rotated PDF page comment');pass('unsaved save/stay, edit, page switching, local PDF rendering');
+  await page.locator('#copy-json').click();let copied=await page.evaluate(()=>navigator.clipboard.readText());const data=JSON.parse(copied);assert.equal(data.pages.length,3);assert.equal(data.pages[0].comments[0].comment,'EDITED LOCAL COMMENT 修正');assert.ok(Math.abs(data.pages[0].comments[0].region.x-.2)<.003);assert.equal(data.pages[2].original.rotation_degrees,90);assert.equal(data.pages[2].original.width,540);assert.equal(data.pages[2].original.height,960);assert.equal(data.pages[2].page_number,2);assert.ok(!copied.includes('base64')&&!copied.includes('blob:'));
+  const downloadPromise=page.waitForEvent('download');await page.locator('#download-json').click();const download=await downloadPromise;await download.saveAs(output+'/export.json');const saved=JSON.parse(await readFile(output+'/export.json','utf8'));delete data.exported_at;delete saved.exported_at;assert.deepEqual(saved,data);pass('clipboard and downloaded JSON equivalent, normalized coordinates, units, no image bytes');
+  await page.evaluate(()=>{Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:()=>Promise.reject(new Error('denied'))});});await page.locator('#copy-json').click();assert.ok(await page.locator('#copy-dialog').isVisible());assert.equal(JSON.parse(await page.locator('#copy-fallback').inputValue()).pages.length,3);await page.locator('#close-copy').click();pass('clipboard refusal fallback');
+  await page.locator('.delete').click();assert.equal(await page.locator('.comment-card').count(),0);pass('comment delete');
+  await load([file('broken.pdf','application/pdf',Buffer.from('%PDF broken'))]);await assertPages(3);assert.match(await page.locator('#status').innerText(),/読み込めません/);
+  await load([file('101-pages.pdf','application/pdf',largePdfBytes)]);await assertPages(3);assert.match(await page.locator('#status').innerText(),/100ページ/);
+  await writeFile(output+'/oversize.pdf',Buffer.alloc(51*1024*1024));await load(output+'/oversize.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/50MB/);
+  await load([file('unsafe.svg','image/svg+xml',Buffer.from('<svg/>'))]);await assertPages(3);pass('invalid PDF, page cap, size cap, unsupported file');
+  await load(output+'/encrypted.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/パスワード/);pass('password-protected PDF rejected');
+  await page.locator('#file-input').setInputFiles([file('cancel.pdf','application/pdf',pdfBytes)]);await page.locator('#cancel-import').click();await page.locator('#loading').waitFor({state:'hidden'});await assertPages(3);pass('import cancellation');
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'/mobile.png',fullPage:true});assert.ok(await page.locator('#copy-json').isVisible());assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+  await page.setViewportSize({width:1440,height:1000});await page.locator('.page-item').first().click();await page.locator('#stage').waitFor({state:'visible'});await page.screenshot({path:output+'/desktop.png',fullPage:true});pass('responsive mobile and desktop');
+  const httpRequests=requests.filter(r=>/^https?:/.test(r.url));assert.ok(httpRequests.every(r=>r.method==='GET'&&!r.body));assert.ok(httpRequests.every(r=>new URL(r.url).origin===new URL(base).origin));assert.ok(httpRequests.every(r=>!r.url.includes('COMMENT')));assert.deepEqual(errors,[]);pass('network: same-origin static GET only; no uploads, external origins, or runtime errors');
+  await page.locator('#clear-all').click();await page.locator('.page-item').first().waitFor({state:'hidden'});await assertPages(0);assert.ok(await page.locator('#empty-state').isVisible());await load([file('sample.png','image/png',image)]);await assertPages(1);
+  png.data[0]=33;const changedImage=PNG.sync.write(png);await load([file('sample.png','image/png',changedImage)]);await assertPages(2);pass('clear, re-add, same-name different-content multiple images');
+  await writeFile(output+'/network.json',JSON.stringify(requests,null,2));await writeFile(output+'/report.json',JSON.stringify({base,results,errors,requestCount:requests.length},null,2));
+}finally{await context.close();await browser.close();}
