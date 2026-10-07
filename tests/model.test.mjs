@@ -6,6 +6,7 @@ test('instructions identify originals without site context and preserve user com
   const comment='ヘッダーの余白を減らす。\n  このコメント原文は変更しない。';
   const output=exportDocument([{id:'f',name:'dashboard.png',type:'image',size:10,pageCount:1}],[{id:'p',sourceId:'f',name:'dashboard.png',number:1,width:1897,height:905,unit:'px',rotation:0,comments:[{id:'c',region:{x:.8813,y:.182,width:.1,height:.2},text:comment}]}]);
   const guidance=output.instructions_for_ai;assert.ok(!guidance.includes('UI screenshot'));
+  assert.ok(!Object.hasOwn(output,'schema_version'));assert.ok(!Object.hasOwn(output,'exported_at'));
   for(const phrase of ['user feedback comments with specified locations','separately attached images or PDF','file_name and page_number (1-based)','not an external retrieval ID','do not guess','comment verbatim','top-left','fractions from 0 to 1','original.width','original.height','original.unit','rotation_degrees','Original image data is not included in this JSON','original files manually','If no images or PDF are attached, ask the user to attach the images or PDF used for these comments'])assert.ok(guidance.includes(phrase),phrase);
   assert.ok(!guidance.includes('request to modify the tool'));assert.ok(!guidance.includes('No original image binary is embedded'));assert.equal(guidance.match(/manually/g).length,1);assert.ok(guidance.indexOf('Original image data')<guidance.indexOf('Match each pages entry'));assert.ok(guidance.endsWith('respect original.rotation_degrees for PDFs.'));
   assert.equal(output.pages[0].comments[0].comment,comment);
