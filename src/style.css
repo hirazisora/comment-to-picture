@@ -44,6 +44,8 @@
 .action-bar>.file-actions{grid-area:files;min-width:0;max-width:440px}
 .action-bar>.file-actions{flex-direction:column;align-items:flex-start;gap:10px}
 .file-buttons{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.import-hint{margin:0;font-size:12px;color:#61736a}
+body.file-dragging::after{content:"画像・PDFをドロップして追加";position:fixed;inset:12px;z-index:30;display:grid;place-items:center;padding:20px;border:3px dashed var(--accent);border-radius:14px;background:#f4f5f0ed;color:var(--accent);font-size:20px;font-weight:600;pointer-events:none;text-align:center}
 .file-actions .privacy{max-width:none;margin:0;align-self:flex-start;background:#d9ecdf;color:#234b35;border:1px solid #96bba2;font-weight:500}
 .action-bar>.exports{grid-area:exports;align-self:end}
 .empty-description{margin:18px 0}

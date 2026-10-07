@@ -276,7 +276,47 @@ async function importFiles(files) {
 }
 function openPicker(){guarded(()=>$('file-input').click());}
 $('add-files').onclick=openPicker;$('empty-add').onclick=openPicker;
-$('file-input').onchange=e=>{const files=Array.from(e.target.files);e.target.value='';if(files.length)importFiles(files);};
+function requestImport(files) {
+  if(!files.length)return;
+  if(state.importJob || state.deleting){tell('処理中です。完了後にもう一度追加してください。',true);return;}
+  if(document.querySelector('dialog[open]'))return;
+  guarded(()=>importFiles(files));
+}
+$('file-input').onchange=e=>{const files=Array.from(e.target.files);e.target.value='';requestImport(files);};
+document.addEventListener('paste',e=>{
+  const files=Array.from(e.clipboardData?.files || []).filter(file=>file.type.startsWith('image/'));
+  if(!files.length)return;
+  e.preventDefault();requestImport(files);
+});
+let fileDragDepth=0;
+const hasDraggedFiles=e=>Array.from(e.dataTransfer?.types || []).includes('Files');
+const editingTarget=e=>e.target instanceof Element && e.target.closest('input,textarea,[contenteditable]:not([contenteditable="false"])');
+function clearFileDrag(){fileDragDepth=0;document.body.classList.remove('file-dragging');}
+document.addEventListener('dragenter',e=>{
+  if(!hasDraggedFiles(e))return;
+  e.preventDefault();fileDragDepth++;document.body.classList.add('file-dragging');
+});
+document.addEventListener('dragover',e=>{
+  if(!hasDraggedFiles(e)){
+    if(!editingTarget(e)){e.preventDefault();e.dataTransfer.dropEffect='none';}
+    return;
+  }
+  e.preventDefault();e.dataTransfer.dropEffect=state.importJob || state.deleting || document.querySelector('dialog[open]')?'none':'copy';
+});
+document.addEventListener('dragleave',()=>{if(fileDragDepth>0 && --fileDragDepth===0)clearFileDrag();});
+document.addEventListener('drop',e=>{
+  const files=Array.from(e.dataTransfer?.files || []),isFileDrop=files.length || hasDraggedFiles(e);
+  clearFileDrag();if(!isFileDrop){
+    if(!editingTarget(e)){
+      e.preventDefault();
+      if(Array.from(e.dataTransfer?.types || []).includes('text/uri-list'))tell('URLからは読み込めません。画像・PDFファイルを追加してください。',true);
+    }
+    return;
+  }
+  e.preventDefault();
+  if(files.length)requestImport(files);else tell('画像・PDFファイルを直接ドロップしてください。',true);
+});
+document.addEventListener('dragend',clearFileDrag);window.addEventListener('blur',clearFileDrag);
 $('cancel-import').onclick=()=>{const job=state.importJob;if(job){job.cancelled=true;job.cancelCurrent?.();$('progress').textContent='中止しています…';}};
 $('clear-all').onclick=()=>confirmRemoval('すべて削除しますか？',`読み込んだすべての画像・PDFとコメントを削除します。必要なコメントJSONは先に保存してください。${state.dirty?' 入力中の未保存コメントも削除されます。':''}`,async()=>{const retired=state.sources;state.sources=[];state.pages=[];showEmptyState();await releaseSources(retired);});
 const json = () => JSON.stringify(exportDocument(state.sources,state.pages),null,2);
