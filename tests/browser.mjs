@@ -44,6 +44,10 @@ try{
   await load([file('unsafe.svg','image/svg+xml',Buffer.from('<svg/>'))]);await assertPages(3);pass('invalid PDF, page cap, size cap, unsupported file');
   await load(output+'/encrypted.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/パスワード/);pass('password-protected PDF rejected');
   await page.locator('#file-input').setInputFiles([file('cancel.pdf','application/pdf',pdfBytes)]);await page.locator('#cancel-import').click();await page.locator('#loading').waitFor({state:'hidden'});await assertPages(3);pass('import cancellation');
+  let workerRequested;
+  const workerSeen=new Promise(resolve=>{workerRequested=resolve;});
+  await page.route('**/pdf.worker.mjs',async route=>{workerRequested();await new Promise(resolve=>setTimeout(resolve,2000));await route.continue().catch(()=>{});});
+  await page.locator('#file-input').setInputFiles([file('slow-cancel.pdf','application/pdf',pdfBytes)]);await workerSeen;await page.locator('#cancel-import').click();await page.locator('#loading').waitFor({state:'hidden',timeout:5000});await assertPages(3);await page.unroute('**/pdf.worker.mjs');pass('cancel during PDF worker startup');
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'/mobile.png',fullPage:true});assert.ok(await page.locator('#copy-json').isVisible());assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
   await page.setViewportSize({width:1440,height:1000});await page.locator('.page-item').first().click();await page.locator('#stage').waitFor({state:'visible'});await page.screenshot({path:output+'/desktop.png',fullPage:true});pass('responsive mobile and desktop');
   const httpRequests=requests.filter(r=>/^https?:/.test(r.url));assert.ok(httpRequests.every(r=>r.method==='GET'&&!r.body));assert.ok(httpRequests.every(r=>new URL(r.url).origin===new URL(base).origin));assert.ok(httpRequests.every(r=>!r.url.includes('COMMENT')));assert.deepEqual(errors,[]);pass('network: same-origin static GET only; no uploads, external origins, or runtime errors');

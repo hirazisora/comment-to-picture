@@ -152,6 +152,7 @@ async function importFiles(files) {
       if(!isPdf && !/^(image\/(png|jpeg|webp|gif|bmp))$/.test(file.type))throw new Error('対応する画像形式またはPDFを選んでください。');
       const bytes=await file.arrayBuffer();if(job.cancelled)break;
       const digest=await crypto.subtle.digest('SHA-256',bytes);
+      if(job.cancelled)break;
       const fingerprint=file.name+':'+Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');
       if(state.sources.some(s=>s.fingerprint===fingerprint)){notices.push(`${file.name}: 追加済みのためスキップ。`);continue;}
       if(state.sources.reduce((n,s)=>n+s.size,0)+file.size>LIMITS.totalBytes)throw new Error('合計150MBを超えます。');
@@ -160,12 +161,14 @@ async function importFiles(files) {
         const data=new Uint8Array(bytes);if(job.cancelled)break;
         task=pdfjs.getDocument({data,cMapUrl:new URL('./vendor/pdfjs/cmaps/',import.meta.url).href,cMapPacked:true,standardFontDataUrl:new URL('./vendor/pdfjs/standard_fonts/',import.meta.url).href,wasmUrl:new URL('./vendor/pdfjs/wasm/',import.meta.url).href,useSystemFonts:false,isEvalSupported:false,enableXfa:false});
         const passwordFailure=new Promise((resolve,reject)=>{task.onPassword=()=>{const e=new Error('パスワード付きPDFは読み込めません。');e.name='PasswordException';reject(e);};});
-        job.cancelCurrent=()=>task.destroy();
-        document=await timeout(Promise.race([task.promise,passwordFailure]),30000,()=>task.destroy());
+        let rejectCancel;
+        const cancelFailure=new Promise((resolve,reject)=>{rejectCancel=reject;});
+        job.cancelCurrent=()=>{rejectCancel(new Error('cancelled'));task.destroy().catch(()=>{});};
+        document=await timeout(Promise.race([task.promise,passwordFailure,cancelFailure]),30000,()=>task.destroy());
         if(document.numPages+state.pages.length>LIMITS.pages)throw new Error('最大100ページを超えます。');
         for(let n=1;n<=document.numPages;n++) {
           if(job.cancelled)break;
-          const pdfPage=await timeout(document.getPage(n),10000,()=>task.destroy());const v=pdfPage.getViewport({scale:1});
+          const pdfPage=await timeout(Promise.race([document.getPage(n),cancelFailure]),10000,()=>task.destroy());const v=pdfPage.getViewport({scale:1});
           if(!Number.isFinite(v.width)||!Number.isFinite(v.height)||v.width<=0||v.height<=0||v.width>100000||v.height>100000)throw new Error('ページ寸法が不正または過大です。');
           pages.push({id:id(),sourceId:source.id,name:file.name,number:n,width:v.width,height:v.height,unit:'pt',rotation:pdfPage.rotate,comments:[]});pdfPage.cleanup();
         }
@@ -173,6 +176,7 @@ async function importFiles(files) {
       } else {
         if(state.pages.length>=LIMITS.pages)throw new Error('最大100ページを超えます。');
         url=URL.createObjectURL(file);const image=new Image();image.src=url;
+        job.cancelCurrent=()=>{image.src='';};
         await timeout(image.decode(),15000);
         if(!image.naturalWidth||image.naturalWidth*image.naturalHeight>LIMITS.imagePixels)throw new Error('画像は最大4000万画素までです。');
         pages.push({id:id(),sourceId:source.id,name:file.name,number:1,width:image.naturalWidth,height:image.naturalHeight,unit:'px',rotation:0,url,comments:[]});source.url=url;
