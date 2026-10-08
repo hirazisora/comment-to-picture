@@ -1,4 +1,5 @@
 import {LIMITS, rectangle, validRegion, exportDocument} from './model.mjs';
+import {videoMime,inspectVideo,loadVideo,releaseVideo,formatTime} from './video.mjs';
 import * as pdfjs from './vendor/pdfjs/pdf.mjs';
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.mjs', import.meta.url).href;
 const $ = id => document.getElementById(id);
@@ -6,6 +7,24 @@ const state = {sources: [], pages: [], current: -1, draft: null, dirty: false, z
 let pendingAction = null, confirmationAction = null, renderTask = null, drag = null, preview = null, pan = null;
 const id = () => crypto.randomUUID();
 const current = () => state.pages[state.current];
+const isVideo = () => current()?.type==='video';
+let cancelVideoLoad=null,videoVolume=0;
+function stopVideo() {cancelVideoLoad?.();cancelVideoLoad=null;releaseVideo($('video'));$('video').hidden=true;$('canvas').hidden=false;$('video-controls').hidden=true;}
+function updateVideoControls() {
+  if(!isVideo())return;
+  const v=$('video');$('video-toggle').textContent=v.paused?'再生':'一時停止';$('video-toggle').disabled=state.rendering||v.seeking||state.deleting;
+  $('video-seek').max=current().duration;$('video-seek').value=v.currentTime;$('video-seek').disabled=state.rendering||state.deleting;
+  $('video-time').textContent=formatTime(v.currentTime)+' / '+formatTime(current().duration);
+  const volume=Math.round((v.muted?0:v.volume)*100);
+  $('video-volume').value=volume;$('video-volume').setAttribute('aria-valuetext',volume===0?'0%（消音）':volume+'%');$('video-volume-value').value=volume+'%';if(!drag)drawRegions();
+}
+function seekVideo(seconds) {stopInteractions();$('video').pause();$('video').currentTime=Math.max(0,Math.min(current().duration,seconds));updateVideoControls();}
+$('video-toggle').onclick=()=>guarded(async()=>{if(!isVideo())return;stopInteractions();const v=$('video'),p=current();if(!v.paused)v.pause();else {if(v.ended)v.currentTime=0;try{await v.play();}catch(error){if(current()?.id===p.id&&error.name!=='AbortError')tell('動画を再生できませんでした。形式・コーデックをご確認ください。',true);}}});
+$('video-seek').oninput=e=>{const next=Number(e.target.value);e.target.value=$('video').currentTime;if(isVideo())guarded(()=>seekVideo(next));};
+$('video-volume').oninput=e=>{videoVolume=Number(e.target.value)/100;$('video').volume=videoVolume;$('video').muted=videoVolume===0;updateVideoControls();};
+for(const event of ['timeupdate','play','pause','seeking','seeked','ended','volumechange'])$('video').addEventListener(event,updateVideoControls);
+$('video').addEventListener('error',()=>{if(isVideo()&&!state.rendering){$('video').pause();tell('動画の形式・コーデックをブラウザで再生できません。',true);}});
+function openComment(comment) {guarded(()=>{if(isVideo())seekVideo(comment.time_seconds);editComment(comment);});}
 const commentColors = ['#a35416','#2869a5','#923d78','#367442','#7853a2','#a33746','#277577','#735b2e','#4959a2','#566634'];
 function colorComment(element,index) {const color=commentColors[index % commentColors.length];element.style.setProperty('--comment-color',color);element.style.setProperty('--comment-tint',color+'1a');}
 const tell = (message, error = false) => { $('status').textContent = error ? message : ''; $('status').hidden = !error; };
@@ -13,9 +32,9 @@ function button(text, action, className = '') { const b = document.createElement
 function guarded(action) { if(state.deleting || confirmationAction || $('unsaved-dialog').open)return; if (state.dirty) { stopPan();pendingAction = action; $('unsaved-dialog').showModal(); } else { closeEditor(); action(); } }
 function closeEditor() { state.draft = null; state.dirty = false; $('editor').hidden = true; $('editor-error').textContent = ''; drawRegions(); }
 function editComment(comment) {
-  state.draft = {id: comment.id || id(), region: {...comment.region}, text: comment.text || '', existing: !!comment.id};
+  state.draft = {id: comment.id || id(), region: {...comment.region}, text: comment.text || '', existing: !!comment.id,...(isVideo()?{time_seconds:comment.time_seconds??$('video').currentTime}:{})};
   state.dirty = !comment.id; $('editor').hidden = false;
-  $('editor-title').textContent = comment.id ? 'コメントを編集' : '新しいコメント';
+  $('editor-title').textContent = (comment.id ? 'コメントを編集' : '新しいコメント')+(isVideo()?' · '+formatTime(state.draft.time_seconds):'');
   $('comment-text').value = state.draft.text;
   $('editor-error').textContent = ''; drawRegions(); $('comment-text').focus();
 }
@@ -23,7 +42,8 @@ function saveDraft() {
   if (!state.draft || !current()) return true;
   const text = $('comment-text').value, region = {...state.draft.region};
   if (!text.trim() || !validRegion(region)) { $('editor-error').textContent = !text.trim() ? 'コメントを入力してください。' : '範囲は画像内に収め、幅と高さを0より大きくしてください。'; return false; }
-  const c = {id: state.draft.id, text, region}, list = current().comments;
+  if(isVideo()&&(!Number.isFinite(state.draft.time_seconds)||state.draft.time_seconds<0||state.draft.time_seconds>current().duration)){ $('editor-error').textContent='動画の時刻が不正です。範囲を指定し直してください。';return false;}
+  const c = {id: state.draft.id, text, region,...(isVideo()?{time_seconds:state.draft.time_seconds}:{})}, list = current().comments;
   const index = list.findIndex(item => item.id === c.id);
   if (index < 0) list.push(c); else list[index] = c;
   closeEditor(); refreshComments(); refreshPages(); refreshSummary(); tell('コメントを保存しました。JSONに含まれます。'); return true;
@@ -57,6 +77,7 @@ function refreshNavigation() {
   for(const key of ['zoom-in','zoom-out','fit'])$(key).disabled=!active || state.deleting;
 }
 function showEmptyState() {
+  stopVideo();
   stopInteractions();
   ++state.renderToken;renderTask?.cancel();renderTask=null;state.current=-1;state.rendering=false;
   drag=null;preview=null;closeEditor();refreshPages();refreshComments();refreshSummary();refreshNavigation();
@@ -96,9 +117,9 @@ function refreshPages() {
   state.pages.forEach((p,index) => {
     const b = button('', () => guarded(()=>selectPage(index)), 'page-item'+(index===state.current?' active':''));
     b.setAttribute('aria-current', index===state.current?'page':'false');b.disabled=state.deleting;b.dataset.pageId=p.id;
-    if(p.url) {const img = document.createElement('img'); img.src=p.url; img.alt=''; b.append(img);}
+    if(p.url && p.type!=='video') {const img = document.createElement('img'); img.src=p.url; img.alt=''; b.append(img);}
     const title = document.createElement('span'); title.className='page-number'; title.textContent=`${index+1}. ${p.name}`;
-    const detail=document.createElement('small'); detail.textContent=`${p.unit==='pt'?'PDF '+p.number+'ページ':'画像'} · ${p.comments.length}コメント`; b.append(title,detail);
+    const detail=document.createElement('small'); detail.textContent=`${p.type==='video'?'動画 '+formatTime(p.duration):p.unit==='pt'?'PDF '+p.number+'ページ':'画像'} · ${p.comments.length}コメント`; b.append(title,detail);
     const entry=document.createElement('div');entry.className='page-entry';
     const remove=button('×',()=>requestPageDeletion(p.id),'page-remove');remove.dataset.pageId=p.id;remove.setAttribute('aria-label',`${p.name}${p.unit==='pt'?' PDF '+p.number+'ページ':''} を削除`);remove.disabled=state.deleting || !!state.importJob;entry.append(b,remove);list.append(entry);
   });
@@ -108,10 +129,11 @@ function refreshComments() {
   $('comment-count').textContent=p?.comments.length || 0; $('comment-empty').hidden=!!p?.comments.length;
   p?.comments.forEach((c,index)=>{
     const card=document.createElement('div'); card.className='comment-card';card.dataset.commentId=c.id;colorComment(card,index);
-    const open=button('',()=>guarded(()=>editComment(c)),'comment-open');
+    const open=button('',()=>openComment(c),'comment-open');
     open.setAttribute('aria-label',`コメント ${index+1} を編集`);
     const label=document.createElement('strong'); label.className='comment-number';label.textContent=String(index+1);
     const text=document.createElement('p'); text.textContent=c.text; open.append(label,text);
+    if(p.type==='video'){const time=document.createElement('span');time.className='comment-time';time.textContent=formatTime(c.time_seconds);open.append(time);}
     card.append(open,button('削除',()=>confirmRemoval('このコメントを削除しますか？',state.dirty && state.draft?.id===c.id?'編集中の未保存内容も削除されます。':'この範囲のコメントを削除します。',()=>{if(state.draft?.id===c.id)closeEditor();p.comments=p.comments.filter(x=>x.id!==c.id);refreshComments();refreshPages();refreshSummary();drawRegions();}),'delete')); list.append(card);
   }); drawRegions();
 }
@@ -126,7 +148,7 @@ function addRegionElement(region, number, active=false, action=null) {
 }
 function drawRegions() {
   $('overlay').replaceChildren(); const p=current();
-  p?.comments.forEach((c,i)=>{if(c.id!==state.draft?.id)addRegionElement(c.region,i+1,false,()=>guarded(()=>editComment(c)));});
+  p?.comments.forEach((c,i)=>{if(c.id!==state.draft?.id && (!isVideo()||($('video').paused&&!$('video').seeking&&Math.abs(c.time_seconds-$('video').currentTime)<=.1)))addRegionElement(c.region,i+1,false,()=>openComment(c));});
   if(state.draft && validRegion(state.draft.region)){
     const index=p.comments.findIndex(c=>c.id===state.draft.id);
     addRegionElement(state.draft.region,index<0?p.comments.length+1:index+1,true);
@@ -146,6 +168,7 @@ $('zoom-in').onclick=()=>zoom(.25); $('zoom-out').onclick=()=>zoom(-.25); $('fit
 async function selectPage(index) {
   if(index<0||index>=state.pages.length)return;
   stopInteractions();
+  stopVideo();
   state.current=index; state.zoom=1;state.rendering=true; const token=++state.renderToken;
   if(renderTask) {renderTask.cancel();renderTask=null;}
   $('empty-state').hidden=true; $('stage').hidden=true;$('render-error').hidden=true;
@@ -155,6 +178,13 @@ async function selectPage(index) {
   const p=current(), source=state.sources.find(s=>s.id===p.sourceId);
   tell('ページを表示しています…');
   try {
+    if(p.type==='video') {
+      $('canvas').hidden=true;$('video').hidden=false;$('video').volume=videoVolume;$('video').muted=videoVolume===0;
+      await loadVideo($('video'),source.url,cancel=>{cancelVideoLoad=cancel;});
+      if(token!==state.renderToken)return;
+      cancelVideoLoad=null;$('stage').hidden=false;$('video-controls').hidden=false;state.rendering=false;
+      $('dimensions').textContent=`${p.name} · 動画 · ${p.width} × ${p.height} px`;updateVideoControls();return;
+    }
     const scale=Math.min(2,Math.sqrt(LIMITS.renderPixels/(p.width*p.height)));
     const canvas=document.createElement('canvas');
     if(p.url) {
@@ -209,12 +239,12 @@ window.addEventListener('blur',stopInteractions);
 window.addEventListener('resize',stopInteractions);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopInteractions();});
 $('overlay').onpointerdown=e=>{
-  if(e.button!==0||e.target.closest('button')||state.rendering||state.deleting||pan||!current())return;
+  if(e.button!==0||e.target.closest('button')||state.rendering||state.deleting||pan||!current()||(isVideo()&&$('video').seeking))return;
   if(state.dirty){guarded(()=>tell('もう一度ドラッグして範囲を指定してください。'));return;}
-  closeEditor();drag={start:point(e),pointer:e.pointerId};$('overlay').setPointerCapture(e.pointerId);preview=addRegionElement({x:0,y:0,width:0,height:0},null);
+  if(isVideo())$('video').pause();closeEditor();drag={start:point(e),pointer:e.pointerId,...(isVideo()?{time_seconds:$('video').currentTime}:{})};$('overlay').setPointerCapture(e.pointerId);preview=addRegionElement({x:0,y:0,width:0,height:0},null);
 };
 $('overlay').onpointermove=e=>{if(!drag)return;const r=rectangle(drag.start,point(e));Object.assign(preview.style,{left:r.x*100+'%',top:r.y*100+'%',width:r.width*100+'%',height:r.height*100+'%'});};
-$('overlay').onpointerup=e=>{if(!drag)return;const r=rectangle(drag.start,point(e));drag=null;preview?.remove();preview=null;if(validRegion(r)&&r.width>=.005&&r.height>=.005)editComment({region:r});else tell('少し大きくドラッグして範囲を囲んでください。');};
+$('overlay').onpointerup=e=>{if(!drag)return;const r=rectangle(drag.start,point(e)),time=drag.time_seconds;drag=null;preview?.remove();preview=null;if(validRegion(r)&&r.width>=.005&&r.height>=.005)editComment({region:r,...(isVideo()?{time_seconds:time}:{})});else tell('少し大きくドラッグして範囲を囲んでください。');};
 $('overlay').onpointercancel=()=>{drag=null;preview?.remove();preview=null;};
 function timeout(promise, ms, cancel) {return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{cancel?.();reject(new Error('読み込み時間が上限を超えました。'));},ms);promise.then(v=>{clearTimeout(timer);resolve(v);},e=>{clearTimeout(timer);reject(e);});});}
 async function importFiles(files) {
@@ -227,26 +257,32 @@ async function importFiles(files) {
     let url=null, document=null, task=null;
     $('progress').textContent=`${file.name} を読み込み中…`;
     try {
-      if(file.size>LIMITS.fileBytes)throw new Error('1ファイル50MBを超えています。');
       if(file.size===0)throw new Error('空のファイルです。');
       const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
-      if(!isPdf && !/^(image\/(png|jpeg|webp|gif|bmp))$/.test(file.type))throw new Error('対応する画像形式またはPDFを選んでください。');
-      const bytes=await file.arrayBuffer();if(job.cancelled)break;
-      const digest=await crypto.subtle.digest('SHA-256',bytes);
-      if(job.cancelled)break;
-      const fingerprint=file.name+':'+Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');
-      if(state.sources.some(s=>s.fingerprint===fingerprint))continue;
-      if(state.sources.reduce((n,s)=>n+s.size,0)+file.size>LIMITS.totalBytes)throw new Error('合計150MBを超えます。');
-      const source={id:id(),name:file.name,size:file.size,fingerprint,type:isPdf?'pdf':'image',pageCount:1}; const pages=[];
-      if(isPdf) {
-        const data=new Uint8Array(bytes);if(job.cancelled)break;
+      const mime=videoMime(file),isVideoFile=!!mime;
+      if(!isPdf && !isVideoFile && !/^(image\/(png|jpeg|webp|gif|bmp))$/.test(file.type))throw new Error('対応する画像形式・PDF・MP4・WebMを選んでください。');
+      const source={id:id(),name:file.name,size:file.size,type:isPdf?'pdf':isVideoFile?'video':'image',pageCount:1}; const pages=[];
+      if(isVideoFile) {
+        const metadata=await inspectVideo(file,cancel=>{job.cancelCurrent=cancel;});url=metadata.url;
+        Object.assign(source,{url,mime,duration:metadata.duration});
+        pages.push({id:id(),sourceId:source.id,name:file.name,number:1,width:metadata.width,height:metadata.height,unit:'px',rotation:0,type:'video',duration:metadata.duration,comments:[]});
+      } else if(isPdf) {
+        // PDF.js needs PDF bytes to parse and render. Images/videos use Blob URLs directly.
+        const reader=new FileReader();
+        const bytes=await timeout(new Promise((resolve,reject)=>{
+          reader.onload=()=>resolve(reader.result);
+          reader.onerror=()=>reject(reader.error || new Error('PDFを読み込めませんでした。'));
+          reader.onabort=()=>reject(new Error('cancelled'));
+          job.cancelCurrent=()=>reader.abort();reader.readAsArrayBuffer(file);
+        }),30000,()=>reader.abort());
+        if(job.cancelled)break;
+        const data=new Uint8Array(bytes);
         task=pdfjs.getDocument({data,cMapUrl:new URL('./vendor/pdfjs/cmaps/',import.meta.url).href,cMapPacked:true,standardFontDataUrl:new URL('./vendor/pdfjs/standard_fonts/',import.meta.url).href,wasmUrl:new URL('./vendor/pdfjs/wasm/',import.meta.url).href,useSystemFonts:false,isEvalSupported:false,enableXfa:false});
         const passwordFailure=new Promise((resolve,reject)=>{task.onPassword=()=>{const e=new Error('パスワード付きPDFは読み込めません。');e.name='PasswordException';reject(e);};});
         let rejectCancel;
         const cancelFailure=new Promise((resolve,reject)=>{rejectCancel=reject;});
         job.cancelCurrent=()=>{rejectCancel(new Error('cancelled'));task.destroy().catch(()=>{});};
         document=await timeout(Promise.race([task.promise,passwordFailure,cancelFailure]),30000,()=>task.destroy());
-        if(document.numPages+state.pages.length>LIMITS.pages)throw new Error('最大100ページを超えます。');
         for(let n=1;n<=document.numPages;n++) {
           if(job.cancelled)break;
           const pdfPage=await timeout(Promise.race([document.getPage(n),cancelFailure]),10000,()=>task.destroy());const v=pdfPage.getViewport({scale:1});
@@ -255,7 +291,6 @@ async function importFiles(files) {
         }
         source.pageCount=document.numPages;source.document=document;
       } else {
-        if(state.pages.length>=LIMITS.pages)throw new Error('最大100ページを超えます。');
         url=URL.createObjectURL(file);const image=new Image();image.src=url;
         job.cancelCurrent=()=>{image.src='';};
         await timeout(image.decode(),15000);
@@ -263,7 +298,7 @@ async function importFiles(files) {
         pages.push({id:id(),sourceId:source.id,name:file.name,number:1,width:image.naturalWidth,height:image.naturalHeight,unit:'px',rotation:0,url,comments:[]});source.url=url;
       }
       if(job.cancelled){if(url)URL.revokeObjectURL(url);await document?.destroy();break;}
-      state.sources.push(source);state.pages.push(...pages);url=null;document=null;task=null;added+=pages.length;
+      state.sources.push(source);state.pages=state.pages.concat(pages);url=null;document=null;task=null;added+=pages.length;
     } catch(error) {
       if(url)URL.revokeObjectURL(url);await (document?.destroy() || task?.destroy())?.catch(()=>{});
       if(!job.cancelled)notices.push(`${file.name}: ${error.name==='PasswordException'?'パスワード付きPDFは読み込めません。':error.message?.includes('上限')||error.message?.includes('超え')||error.message?.includes('形式')||error.message?.includes('最大')||error.message?.includes('空')?error.message:'読み込めませんでした。不正・破損・パスワード付きのファイルをご確認ください。'}`);

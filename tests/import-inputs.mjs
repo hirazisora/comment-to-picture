@@ -17,7 +17,7 @@ const settle=async()=>{await page.locator('#loading').waitFor({state:'hidden'});
 const eventFiles=async(entries,type='drop',target='body',options={})=>page.evaluate(({entries,type,target,options})=>{
   const data=new DataTransfer();
   for(const entry of entries){const bytes=new Uint8Array(entry.bytes);const parts=entry.size?[bytes,new Uint8Array(entry.size-bytes.length)]:[bytes];data.items.add(new File(parts,entry.name,{type:entry.mime}));}
-  if(options.delay){const file=data.files[0];const original=file.arrayBuffer.bind(file);Object.defineProperty(file,'arrayBuffer',{value:async()=>{await new Promise(resolve=>{window.finishIncoming=resolve;});return original();}});}
+  if(options.delay){const original=HTMLImageElement.prototype.decode;HTMLImageElement.prototype.decode=async function(){HTMLImageElement.prototype.decode=original;await new Promise(resolve=>{window.finishIncoming=resolve;});return original.call(this);};}
   const event=type==='paste'?new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}):new DragEvent(type,{dataTransfer:data,bubbles:true,cancelable:true});
   document.querySelector(target).dispatchEvent(event);return {prevented:event.defaultPrevented,dropEffect:data.dropEffect};
 },{entries,type,target,options});
@@ -34,9 +34,10 @@ try {
   const clipboardName=(await page.locator('.page-number').innerText()).replace(/^1\. /,'');
   const clipboardBytes=await page.evaluate(async()=>{const items=await navigator.clipboard.read();return Array.from(new Uint8Array(await (await items[0].getType('image/png')).arrayBuffer()));});
   pass('real clipboard image paste imports a local PNG');
-  await nativeImagePaste();await count(1);assert.ok(await page.locator('#status').isHidden());
-  assert.ok((await eventFiles([file(clipboardName,'image/png',clipboardBytes)])).prevented);await settle();await count(1);
-  pass('repeated paste and same-name/content drop do not duplicate the clipboard image');
+  await nativeImagePaste();await count(2);assert.ok(await page.locator('#status').isHidden());
+  assert.ok((await eventFiles([file(clipboardName,'image/png',clipboardBytes)])).prevented);await settle();await count(3);
+  for(let i=0;i<2;i++){await page.locator('.page-remove').last().click();await page.locator('#confirm-delete').click();await page.waitForFunction(()=>!document.querySelector('#add-files').disabled);}
+  await count(1);pass('repeated native paste and identical drop each add an independent item');
   await rectangle();const text='  自作テストの通常テキスト貼り付け\n位置指定コメント  ';
   await page.evaluate(text=>navigator.clipboard.writeText(text),text);await page.locator('#comment-text').focus();await page.keyboard.press('Control+v');
   assert.equal(await page.locator('#comment-text').inputValue(),text);await page.locator('#comment-text').press('Control+Enter');await count(1);
@@ -44,10 +45,10 @@ try {
   const beforeUrl=page.url();assert.ok((await eventFiles([file('drop-one.png'),file('drop-two.png'),file('drop.pdf','application/pdf',pdfBytes)])).prevented);
   await settle();await count(4);assert.equal(page.url(),beforeUrl);assert.ok(!await page.locator('body').evaluate(el=>el.classList.contains('file-dragging')));
   pass('multiple images and PDF drop use local import, prevent default navigation, and clear drag highlighting');
-  await eventFiles([file('drop-one.png'),file('drop-two.png')]);await settle();await count(4);
+  await eventFiles([file('drop-one.png'),file('drop-two.png')]);await settle();await count(6);for(let i=0;i<2;i++){await page.locator('.page-remove').last().click();await page.locator('#confirm-delete').click();await page.waitForFunction(()=>!document.querySelector('#add-files').disabled);}await count(4);
   await eventFiles([file('invalid.svg','image/svg+xml')]);await settle();await count(4);assert.match(await page.locator('#status').innerText(),/対応する画像形式/);
   await eventFiles([file('bad-clipboard.png','image/png',[0,1,2])],'paste');await settle();await count(4);assert.match(await page.locator('#status').innerText(),/読み込めません/);
-  pass('duplicate drop skips existing files; unsupported SVG and corrupt clipboard images show errors');
+  pass('identical drop adds separate items; unsupported SVG and corrupt clipboard images show errors');
   await page.locator('.comment-open').click();await page.locator('#comment-text').fill('未保存の自作テストコメント');
   await eventFiles([file('draft-paste.png')],'paste');assert.ok(await page.locator('#unsaved-dialog').isVisible());await count(4);await page.locator('#draft-stay').click();
   assert.equal(await page.locator('#comment-text').inputValue(),'未保存の自作テストコメント');await count(4);
@@ -68,12 +69,12 @@ try {
   await eventFiles([file('busy-paste.png')],'paste');assert.match(await page.locator('#status').innerText(),/処理中/);await count(5);
   await page.locator('#cancel-import').click();await page.evaluate(()=>window.finishIncoming());await settle();await count(5);
   pass('concurrent paste while loading is refused; cancelling a dropped file keeps prior work');
-  await eventFiles([file('too-large.png','image/png',image,51*1024*1024)]);await settle();await count(5);assert.match(await page.locator('#status').innerText(),/50MB/);
-  await eventFiles([file('empty.png','image/png',[])],'paste');await settle();await count(5);assert.match(await page.locator('#status').innerText(),/空のファイル/);
-  pass('paste/drop share the per-file size limit and reject empty images');
+  await eventFiles([file('large.png','image/png',image,51*1024*1024)]);await settle();await count(6);assert.ok(await page.locator('#status').isHidden());
+  await eventFiles([file('empty.png','image/png',[])],'paste');await settle();await count(6);assert.match(await page.locator('#status').innerText(),/空のファイル/);
+  pass('drop accepts an actual 51MiB valid image; paste still rejects empty images');
   await clear();await eventFiles([file('large-a.png','image/png',image,49*1024*1024),file('large-b.png','image/png',image,49*1024*1024),file('large-c.png','image/png',image,49*1024*1024)]);await settle();await count(3);
-  await eventFiles([file('total-limit.png','image/png',image,4*1024*1024)],'paste');await settle();await count(3);assert.match(await page.locator('#status').innerText(),/合計150MB/);
-  pass('multi-file drop and image paste share the 150MB aggregate cap');
+  await eventFiles([file('over-old-total.png','image/png',image,4*1024*1024)],'paste');await settle();await count(4);assert.ok(await page.locator('#status').isHidden());
+  pass('multi-file drop plus image paste accepts an actual 151MiB aggregate');
   await clear();await page.locator('#file-input').setInputFiles({name:'picker.png',mimeType:'image/png',buffer:Buffer.from(image)});await settle();await count(1);
   await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok(await page.locator('.import-hint').isVisible());await page.screenshot({path:'test-results/import-mobile.png',fullPage:true});
   await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:'test-results/import-desktop.png',fullPage:true});

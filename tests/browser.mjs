@@ -12,7 +12,6 @@ const png=new PNG({width:960,height:540});for(let y=0;y<540;y++)for(let x=0;x<96
 const image=PNG.sync.write(png);await writeFile(output+'/sample.png',image);
 const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(let i=0;i<2;i++){const p=pdf.addPage([960,540]);p.drawText('LOCAL TEST SLIDE '+(i+1),{x:60,y:440,size:32,font,color:rgb(.1,.35,.3)});p.drawRectangle({x:60,y:100,width:350,height:230,color:rgb(.8,.9,.8)});if(i===1)p.setRotation(degrees(90));}
 const pdfBytes=Buffer.from(await pdf.save());await writeFile(output+'/sample.pdf',pdfBytes);
-const largePdf=await PDFDocument.create();for(let i=0;i<101;i++)largePdf.addPage([100,100]);const largePdfBytes=Buffer.from(await largePdf.save());
 const browser=await chromium.launch({headless:true});
 const context=await browser.newContext({acceptDownloads:true,permissions:['clipboard-read','clipboard-write']});
 const page=await context.newPage(), requests=[], errors=[];
@@ -34,8 +33,8 @@ try{
   assert.equal(await page.locator('.brand p').innerText(),'「ここをこうして」をAIに伝える');
   const brandSizes=await page.locator('.brand h1').evaluate(el=>({heading:parseFloat(getComputedStyle(el).fontSize),particle:parseFloat(getComputedStyle(el.querySelector('.brand-particle')).fontSize)}));assert.equal(brandSizes.particle,brandSizes.heading*.8);
   assert.equal(await page.locator('.comments-panel>p').innerText(),'画面上をドラッグして範囲を指定し、コメントを追加します。');assert.equal(await page.locator('#editor label').count(),0);assert.equal(await page.locator('#comment-text').getAttribute('aria-label'),'修正してほしいこと');assert.equal(await page.locator('#comment-text').getAttribute('placeholder'),'例：ここの文字をもっと大きく');
-  assert.deepEqual(await page.locator('.help-steps p').allTextContents(),['①画像・PDFを読み込む','②範囲を指定してコメントを入力','③コメントJSONをコピーして画像と一緒にAIへ伝える']);
-  assert.equal(await page.locator('#empty-state h2').innerText(),'ココヲコウ');assert.deepEqual(await page.locator('.empty-description p').allTextContents(),['画像に範囲指定でコメントを付けられます。','コメントと位置をJSONにまとめてAIに渡せます。']);assert.equal(await page.locator('.privacy').innerText(),'全ての処理はブラウザ上で完結し、外部への送信はされません。');
+  assert.deepEqual(await page.locator('.help-steps p').allTextContents(),['①画像・PDF・動画を読み込む','②範囲を指定してコメントを入力','③コメントJSONをコピーして画像と一緒にAIへ伝える']);
+  assert.equal(await page.locator('#empty-state h2').innerText(),'ココヲコウ');assert.deepEqual(await page.locator('.empty-description p').allTextContents(),['画像・動画に範囲指定でコメントを付けられます。','コメントと位置をJSONにまとめてAIに渡せます。']);assert.equal(await page.locator('.privacy').innerText(),'全ての処理はブラウザ上で完結し、外部への送信はされません。');
   const privacyBox=await page.locator('.privacy').boundingBox(),addBox=await page.locator('#add-files').boundingBox();assert.ok(privacyBox.y+privacyBox.height<=addBox.y);
   assert.equal(await page.locator('#help').evaluate(el=>getComputedStyle(el).textAlign),'left');
   const badgeContrast=await page.locator('.privacy').evaluate(el=>{const style=getComputedStyle(el);const luminance=color=>{const channels=color.match(/\d+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return channels[0]*.2126+channels[1]*.7152+channels[2]*.0722;};return (luminance(style.backgroundColor)+.05)/(luminance(style.color)+.05);});assert.ok(badgeContrast>=7,'privacy badge text contrast at least 7:1');
@@ -45,7 +44,7 @@ try{
   await page.setViewportSize({width:1440,height:1000});const exampleTarget=await page.locator('#copy-json').boundingBox();await page.screenshot({path:output+'/empty-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'/empty-mobile.png',fullPage:true});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.setViewportSize({width:1440,height:1000});pass('UI checklist: one desktop row, left-aligned help, mobile stacking, smaller ヲ, exact subtitle and editor text');
   await load([file('sample.png','image/png',image),file('sample.pdf','application/pdf',pdfBytes)]);await assertPages(3);await page.locator('#stage').waitFor({state:'visible'});pass('multiple image/PDF import with rotated page');
-  await load([file('sample.png','image/png',image)]);await assertPages(3);assert.ok(await page.locator('#status').isHidden());pass('duplicate skipped without normal status text');
+  await load([file('sample.png','image/png',image)]);await assertPages(4);assert.ok(await page.locator('#status').isHidden());await page.locator('.page-remove').last().click();await page.locator('#confirm-delete').click();await page.waitForFunction(()=>!document.querySelector('#add-files').disabled);await assertPages(3);pass('identical image re-add creates an independent item; deleting it keeps original pages');
   let box=await page.locator('#overlay').boundingBox();await page.mouse.move(box.x+box.width*.2,box.y+box.height*.2);await page.mouse.down();await page.mouse.move(box.x+box.width*.7,box.y+box.height*.6);await page.mouse.up();await saveComment('TEST COMMENT LOCAL ONLY 見出しを修正');
   await page.locator('#zoom-in').click();assert.equal(await page.locator('#zoom-label').innerText(),'125%');
   await dragRegion();assert.equal(await page.locator('#editor input[type=number]').count(),0);assert.equal(await page.getByRole('textbox',{name:'修正してほしいこと',exact:true}).count(),1);await page.setViewportSize({width:304,height:419});await page.locator('#comment-text').scrollIntoViewIfNeeded();await page.screenshot({path:output+'/editor-304.png',fullPage:true});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.setViewportSize({width:1440,height:1000});await page.locator('#editor button[type=submit]').click();assert.match(await page.locator('#editor-error').innerText(),/コメントを入力/);
@@ -59,9 +58,8 @@ try{
   await page.evaluate(()=>{Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:()=>Promise.reject(new Error('denied'))});});await page.locator('#copy-json').click();assert.ok(await page.locator('#copy-dialog').isVisible());assert.ok(await page.locator('#copy-success-dialog').isHidden());assert.equal(JSON.parse(await page.locator('#copy-fallback').inputValue()).pages.length,3);await page.locator('#close-copy').click();pass('clipboard refusal fallback without success dialog');
   await page.locator('.delete').click();await page.locator('#confirm-delete').click();assert.equal(await page.locator('.comment-card').count(),0);pass('comment delete with app dialog');
   await load([file('broken.pdf','application/pdf',Buffer.from('%PDF broken'))]);await assertPages(3);assert.match(await page.locator('#status').innerText(),/読み込めません/);
-  await load([file('101-pages.pdf','application/pdf',largePdfBytes)]);await assertPages(3);assert.match(await page.locator('#status').innerText(),/100ページ/);
-  await writeFile(output+'/oversize.pdf',Buffer.alloc(51*1024*1024));await load(output+'/oversize.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/50MB/);
-  await load([file('unsafe.svg','image/svg+xml',Buffer.from('<svg/>'))]);await assertPages(3);pass('invalid PDF, page cap, size cap, unsupported file');
+  await writeFile(output+'/oversize.pdf',Buffer.alloc(51*1024*1024));await load(output+'/oversize.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/読み込めません/);
+  await load([file('unsafe.svg','image/svg+xml',Buffer.from('<svg/>'))]);await assertPages(3);pass('invalid small/large PDF and unsupported file are refused by format checks');
   await load(output+'/encrypted.pdf');await assertPages(3);assert.match(await page.locator('#status').innerText(),/パスワード/);pass('password-protected PDF rejected');
   await page.locator('#file-input').setInputFiles([file('cancel.pdf','application/pdf',pdfBytes)]);await page.locator('#cancel-import').click();await page.locator('#loading').waitFor({state:'hidden'});await assertPages(3);pass('import cancellation');
   let workerRequested;

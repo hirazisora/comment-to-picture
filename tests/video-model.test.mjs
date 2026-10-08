@@ -1,0 +1,10 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {exportDocument} from '../src/model.mjs';import {formatTime,videoMime} from '../src/video.mjs';
+test('video JSON includes seconds, full-frame normalized coordinates, original size and file metadata',()=>{
+  const output=exportDocument([{id:'v',name:'self-made.webm',type:'video',mime:'video/webm',size:10,pageCount:1,duration:3}],[{id:'p',sourceId:'v',name:'self-made.webm',number:1,type:'video',duration:3,width:640,height:360,unit:'px',rotation:0,comments:[{id:'c',time_seconds:1.23456789,region:{x:.2,y:.3,width:.4,height:.5},text:'  Self-made test comment\n'}]}]);
+  assert.equal(output.files[0].type,'video');assert.equal(output.files[0].mime_type,'video/webm');assert.equal(output.files[0].duration_seconds,3);assert.equal(output.pages[0].media_type,'video');assert.equal(output.pages[0].original.width,640);assert.equal(output.pages[0].comments[0].time_seconds,1.234568);assert.equal(output.pages[0].comments[0].comment,'  Self-made test comment\n');assert.equal(output.time_system.units,'seconds');assert.equal(output.time_system.origin,'start-of-video');assert.ok(output.instructions_for_ai.includes('seek to each comment time_seconds'));assert.ok(!Object.hasOwn(output,'schema_version'));assert.ok(!Object.hasOwn(output,'exported_at'));
+});
+test('image-only export keeps its original schema; time formatting and video format detection are bounded',()=>{
+  const output=exportDocument([{id:'i',name:'self.png',type:'image',size:10,pageCount:1}],[{id:'p',sourceId:'i',name:'self.png',number:1,width:100,height:100,unit:'px',rotation:0,comments:[{id:'c',region:{x:0,y:0,width:1,height:1},text:'test'}]}]);
+  assert.ok(!Object.hasOwn(output,'time_system'));assert.ok(!Object.hasOwn(output.pages[0],'media_type'));assert.ok(!Object.hasOwn(output.pages[0].comments[0],'time_seconds'));assert.equal(formatTime(3661.234),'01:01:01.234');assert.equal(formatTime(NaN),'00:00.000');assert.equal(videoMime({name:'clip.MP4',type:''}),'video/mp4');assert.equal(videoMime({name:'clip.webm',type:''}),'video/webm');assert.equal(videoMime({name:'clip.mov',type:'video/quicktime'}),null);
+});
