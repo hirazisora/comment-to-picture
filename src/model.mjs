@@ -1,4 +1,18 @@
 export const LIMITS = { imagePixels: 40_000_000, renderPixels: 8_000_000 };
+export const MIN_REGION_SIZE = .005;
+// Keep the opposite corner fixed, including when the pointer crosses it.
+export function resizeRegion(region, corner, point) {
+  const right = region.x + region.width, bottom = region.y + region.height;
+  const west = corner.endsWith('w'), north = corner.startsWith('n');
+  const minWidth = Math.min(MIN_REGION_SIZE, west ? right : 1 - region.x);
+  const minHeight = Math.min(MIN_REGION_SIZE, north ? bottom : 1 - region.y);
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const x = west ? clamp(point.x, 0, right - minWidth) : region.x;
+  const y = north ? clamp(point.y, 0, bottom - minHeight) : region.y;
+  return {x, y,
+    width: (west ? right : clamp(point.x, region.x + minWidth, 1)) - x,
+    height: (north ? bottom : clamp(point.y, region.y + minHeight, 1)) - y};
+}
 export function rectangle(a, b) {
   const clamp = v => Math.min(1, Math.max(0, v));
   const x = Math.min(clamp(a.x), clamp(b.x)), y = Math.min(clamp(a.y), clamp(b.y));

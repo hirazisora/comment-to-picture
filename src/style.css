@@ -66,3 +66,12 @@ body.file-dragging::after{content:"画像・PDF・動画をドロップして追
 @media(min-width:1600px){.viewer-panel{height:750px}}
 @media(max-width:800px){.viewer-panel{height:510px}}
 @media(max-width:480px){.viewer-panel{height:450px}}
+
+/* Corner targets stay the same screen size at every zoom level. */
+.region-handle{position:absolute;width:20px;height:20px;padding:0;border:2px solid white;border-radius:4px;background:var(--comment-color);box-shadow:0 0 0 1px var(--comment-color);pointer-events:auto;touch-action:none;z-index:2}
+.region-handle:hover:not(:disabled){background:var(--comment-color);border-color:white}
+.region-handle.nw{left:-20px;top:-20px;cursor:nwse-resize}
+.region-handle.ne{right:-20px;top:-20px;cursor:nesw-resize}
+.region-handle.sw{left:-20px;bottom:-20px;cursor:nesw-resize}
+.region-handle.se{right:-20px;bottom:-20px;cursor:nwse-resize}
+@media(pointer:coarse){.region-handle{width:24px;height:24px}.region-handle.nw{left:-24px;top:-24px}.region-handle.ne{right:-24px;top:-24px}.region-handle.sw{left:-24px;bottom:-24px}.region-handle.se{right:-24px;bottom:-24px}}

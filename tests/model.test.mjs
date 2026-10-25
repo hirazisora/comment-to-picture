@@ -17,3 +17,29 @@ test('deleting PDF pages keeps original page numbers and excludes empty sources'
   const output=exportDocument([{id:'pdf',name:'source.pdf',type:'pdf',size:10,pageCount:3},{id:'empty',name:'deleted.png',type:'image',size:20,pageCount:1}],[{id:'p2',sourceId:'pdf',name:'source.pdf',number:2,width:600,height:800,unit:'pt',rotation:0,comments:[]}]);
   assert.equal(output.files.length,1);assert.equal(output.files[0].page_count,3);assert.equal(output.files[0].included_page_count,1);assert.deepEqual(output.files[0].included_page_numbers,[2]);assert.equal(output.pages[0].page_number,2);
 });
+
+test('resize anchors all four opposite corners and leaves the input unchanged',async()=>{
+  const {resizeRegion}=await import('../src/model.mjs');
+  const original={x:.2,y:.3,width:.4,height:.4};
+  const expected={nw:[.1,.1,.5,.6],ne:[.2,.1,.6,.6],sw:[.1,.3,.5,.6],se:[.2,.3,.6,.6]};
+  for(const corner of Object.keys(expected)) {
+    const region=resizeRegion(original,corner,{x:corner.endsWith('w')?.1:.8,y:corner.startsWith('n')?.1:.9});
+    Object.values(region).forEach((value,i)=>assert.ok(Math.abs(value-expected[corner][i])<1e-12));
+    assert.ok(validRegion(region));
+  }
+  assert.deepEqual(original,{x:.2,y:.3,width:.4,height:.4});
+});
+test('resize clamps image bounds and crossing an anchor preserves the minimum size',async()=>{
+  const {resizeRegion,MIN_REGION_SIZE}=await import('../src/model.mjs');
+  const original={x:.2,y:.3,width:.4,height:.4};
+  for(const corner of ['nw','ne','sw','se']) {
+    const expanded=resizeRegion(original,corner,{x:corner.endsWith('w')?-2:2,y:corner.startsWith('n')?-2:2});
+    assert.ok(validRegion(expanded));
+    assert.equal(corner.endsWith('w')?expanded.x:expanded.x+expanded.width,corner.endsWith('w')?0:1);
+    assert.equal(corner.startsWith('n')?expanded.y:expanded.y+expanded.height,corner.startsWith('n')?0:1);
+    const crossed=resizeRegion(original,corner,{x:corner.endsWith('w')?2:-2,y:corner.startsWith('n')?2:-2});
+    assert.ok(validRegion(crossed));
+    assert.ok(Math.abs(crossed.width-MIN_REGION_SIZE)<1e-12);
+    assert.ok(Math.abs(crossed.height-MIN_REGION_SIZE)<1e-12);
+  }
+});

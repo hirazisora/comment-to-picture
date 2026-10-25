@@ -1,4 +1,4 @@
-import {LIMITS, rectangle, validRegion, exportDocument} from './model.mjs';
+import {LIMITS, MIN_REGION_SIZE, rectangle, resizeRegion, validRegion, exportDocument} from './model.mjs';
 import {videoMime,inspectVideo,loadVideo,releaseVideo,formatTime} from './video.mjs';
 import * as pdfjs from './vendor/pdfjs/pdf.mjs';
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.mjs', import.meta.url).href;
@@ -29,8 +29,8 @@ const commentColors = ['#a35416','#2869a5','#923d78','#367442','#7853a2','#a3374
 function colorComment(element,index) {const color=commentColors[index % commentColors.length];element.style.setProperty('--comment-color',color);element.style.setProperty('--comment-tint',color+'1a');}
 const tell = (message, error = false) => { $('status').textContent = error ? message : ''; $('status').hidden = !error; };
 function button(text, action, className = '') { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.className = className; b.onclick = action; return b; }
-function guarded(action) { if(state.deleting || confirmationAction || $('unsaved-dialog').open)return; if (state.dirty) { stopPan();pendingAction = action; $('unsaved-dialog').showModal(); } else { closeEditor(); action(); } }
-function closeEditor() { state.draft = null; state.dirty = false; $('editor').hidden = true; $('editor-error').textContent = ''; drawRegions(); }
+function guarded(action) { stopInteractions();if(state.deleting || confirmationAction || $('unsaved-dialog').open)return; if (state.dirty) { stopPan();pendingAction = action; $('unsaved-dialog').showModal(); } else { closeEditor(); action(); } }
+function closeEditor() { stopInteractions();state.draft = null; state.dirty = false; $('editor').hidden = true; $('editor-error').textContent = ''; drawRegions(); }
 function editComment(comment) {
   state.draft = {id: comment.id || id(), region: {...comment.region}, text: comment.text || '', existing: !!comment.id,...(isVideo()?{time_seconds:comment.time_seconds??$('video').currentTime}:{})};
   state.dirty = !comment.id; $('editor').hidden = false;
@@ -39,6 +39,7 @@ function editComment(comment) {
   $('editor-error').textContent = ''; drawRegions(); $('comment-text').focus();
 }
 function saveDraft() {
+  stopInteractions();
   if (!state.draft || !current()) return true;
   const text = $('comment-text').value, region = {...state.draft.region};
   if (!text.trim() || !validRegion(region)) { $('editor-error').textContent = !text.trim() ? 'コメントを入力してください。' : '範囲は画像内に収め、幅と高さを0より大きくしてください。'; return false; }
@@ -59,7 +60,7 @@ for (const choice of ['save','discard','stay']) $('draft-'+choice).onclick = () 
 $('unsaved-dialog').addEventListener('cancel', () => { pendingAction = null; });
 function confirmRemoval(title,message,action) {
   if(state.deleting || state.importJob || confirmationAction || $('unsaved-dialog').open)return;
-  stopPan();confirmationAction=action;$('confirm-title').textContent=title;$('confirm-message').textContent=message;$('confirm-dialog').showModal();
+  stopInteractions();confirmationAction=action;$('confirm-title').textContent=title;$('confirm-message').textContent=message;$('confirm-dialog').showModal();
 }
 function cancelRemoval() {confirmationAction=null;$('confirm-dialog').close();}
 $('cancel-delete').onclick=cancelRemoval;
@@ -151,7 +152,11 @@ function drawRegions() {
   p?.comments.forEach((c,i)=>{if(c.id!==state.draft?.id && (!isVideo()||($('video').paused&&!$('video').seeking&&Math.abs(c.time_seconds-$('video').currentTime)<=.1)))addRegionElement(c.region,i+1,false,()=>openComment(c));});
   if(state.draft && validRegion(state.draft.region)){
     const index=p.comments.findIndex(c=>c.id===state.draft.id);
-    addRegionElement(state.draft.region,index<0?p.comments.length+1:index+1,true);
+    const element=addRegionElement(state.draft.region,index<0?p.comments.length+1:index+1,true);
+    for(const [corner,label] of [['nw','左上'],['ne','右上'],['sw','左下'],['se','右下']]) {
+      const handle=button('',null,'region-handle '+corner);handle.dataset.corner=corner;
+      handle.setAttribute('aria-label',label+'の角をリサイズ');element.append(handle);
+    }
   }
   for(const card of $('comment-list').children)card.classList.toggle('active',card.dataset.commentId===state.draft?.id);
 }
@@ -217,6 +222,19 @@ function stopPan() {
 function stopInteractions() {
   stopPan();const finished=drag;drag=null;preview?.remove();preview=null;
   if(finished && $('overlay').hasPointerCapture(finished.pointer))$('overlay').releasePointerCapture(finished.pointer);
+  if(finished?.mode==='resize' && state.draft?.id===finished.draftId) {
+    state.draft.region=finished.region;state.dirty=finished.dirty;drawRegions();
+  }
+}
+function updateResize(e) {
+  if(!drag || drag.mode!=='resize' || state.draft?.id!==drag.draftId)return;
+  const next=point(e),west=drag.corner.endsWith('w'),north=drag.corner.startsWith('n');
+  const region=resizeRegion(drag.region,drag.corner,{
+    x:drag.region.x+(west?0:drag.region.width)+next.x-drag.start.x,
+    y:drag.region.y+(north?0:drag.region.height)+next.y-drag.start.y});
+  state.draft.region=region;
+  state.dirty=drag.dirty || Object.keys(region).some(key=>Math.abs(region[key]-drag.region[key])>1e-12);
+  Object.assign(drag.element.style,{left:region.x*100+'%',top:region.y*100+'%',width:region.width*100+'%',height:region.height*100+'%'});
 }
 $('viewport').addEventListener('pointerdown',e=>{
   if(e.button!==1 || !current() || state.rendering || state.deleting || drag || pan)return;
@@ -239,13 +257,22 @@ window.addEventListener('blur',stopInteractions);
 window.addEventListener('resize',stopInteractions);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopInteractions();});
 $('overlay').onpointerdown=e=>{
-  if(e.button!==0||e.target.closest('button')||state.rendering||state.deleting||pan||!current()||(isVideo()&&$('video').seeking))return;
+  if(e.button!==0||state.rendering||state.deleting||pan||drag||!current()||(isVideo()&&$('video').seeking))return;
+  const handle=e.target.closest('.region-handle');
+  if(handle && state.draft) {
+    e.preventDefault();
+    drag={mode:'resize',start:point(e),pointer:e.pointerId,corner:handle.dataset.corner,element:handle.parentElement,
+      draftId:state.draft.id,region:{...state.draft.region},dirty:state.dirty};
+    $('overlay').setPointerCapture(e.pointerId);return;
+  }
+  if(e.target.closest('button'))return;
   if(state.dirty){guarded(()=>tell('もう一度ドラッグして範囲を指定してください。'));return;}
   if(isVideo())$('video').pause();closeEditor();drag={start:point(e),pointer:e.pointerId,...(isVideo()?{time_seconds:$('video').currentTime}:{})};$('overlay').setPointerCapture(e.pointerId);preview=addRegionElement({x:0,y:0,width:0,height:0},null);
 };
-$('overlay').onpointermove=e=>{if(!drag)return;const r=rectangle(drag.start,point(e));Object.assign(preview.style,{left:r.x*100+'%',top:r.y*100+'%',width:r.width*100+'%',height:r.height*100+'%'});};
-$('overlay').onpointerup=e=>{if(!drag)return;const r=rectangle(drag.start,point(e)),time=drag.time_seconds;drag=null;preview?.remove();preview=null;if(validRegion(r)&&r.width>=.005&&r.height>=.005)editComment({region:r,...(isVideo()?{time_seconds:time}:{})});else tell('少し大きくドラッグして範囲を囲んでください。');};
-$('overlay').onpointercancel=()=>{drag=null;preview?.remove();preview=null;};
+$('overlay').onpointermove=e=>{if(!drag||e.pointerId!==drag.pointer)return;if(!(e.buttons&1)){stopInteractions();return;}if(drag.mode==='resize'){updateResize(e);return;}const r=rectangle(drag.start,point(e));Object.assign(preview.style,{left:r.x*100+'%',top:r.y*100+'%',width:r.width*100+'%',height:r.height*100+'%'});};
+$('overlay').onpointerup=e=>{if(!drag||e.pointerId!==drag.pointer||e.button!==0)return;if(drag.mode==='resize'){updateResize(e);const finished=drag;drag=null;if($('overlay').hasPointerCapture(finished.pointer))$('overlay').releasePointerCapture(finished.pointer);drawRegions();return;}const r=rectangle(drag.start,point(e)),time=drag.time_seconds;drag=null;preview?.remove();preview=null;if(validRegion(r)&&r.width>=MIN_REGION_SIZE&&r.height>=MIN_REGION_SIZE)editComment({region:r,...(isVideo()?{time_seconds:time}:{})});else tell('少し大きくドラッグして範囲を囲んでください。');};
+$('overlay').onpointercancel=e=>{if(drag?.pointer===e.pointerId)stopInteractions();};
+$('overlay').addEventListener('lostpointercapture',e=>{if(drag?.pointer===e.pointerId)stopInteractions();});
 function timeout(promise, ms, cancel) {return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{cancel?.();reject(new Error('読み込み時間が上限を超えました。'));},ms);promise.then(v=>{clearTimeout(timer);resolve(v);},e=>{clearTimeout(timer);reject(e);});});}
 async function importFiles(files) {
   if(state.importJob)return;
